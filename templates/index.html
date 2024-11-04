@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Osoitteet koordinaateiksi</title>
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.8.0/dist/leaflet.css" />
+    <style>
+        body { font-family: Arial, sans-serif; margin: 2rem; }
+        #progress-bar-container { margin-top: 20px; display: none; }
+        .progress-bar {
+            white-space: nowrap;
+        }
+        #map { height: 500px; margin-top: 20px; }
+        table { width: 100%; margin-bottom: 1rem; }
+        th, td {
+            text-align: center;
+            padding: 4px;  /* Reduced padding */
+            vertical-align: middle;  /* Aligns text vertically centered */
+            font-size: 0.875rem;  /* Smaller font size for compact appearance */
+        }
+        th { cursor: pointer; }
+        .selected-column { background-color: #d3f8e2; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-center">Osoitteet koordinaateiksi</h1>
+        <form id="file-form" class="mb-3">
+            <input type="file" class="form-control-file" id="file-input" accept=".xlsx, .xls">
+            <button type="submit" class="btn btn-primary mt-2">Lataa tiedosto</button>
+        </form>
+        <div id="preview-container" class="table-responsive mb-3"></div>
+        <p id="instruction-text" class="text-primary" style="display:none;">Valitse osoitesarake (suositeltu muoto: [katuosoite], [postinumero], [kaupunki])</p>
+        <button id="geocode-btn" class="btn btn-success" style="display:none;">Hae koordinaatit</button>
+        <div id="progress-bar-container">
+            <div class="progress">
+                <div id="progress-bar" class="progress-bar" role="progressbar" style="width: 0%;">0%</div>
+            </div>
+        </div>
+        <button id="download-result" class="btn btn-info mt-2" style="display:none;">Lataa koordinaatit</button>
+        <div id="map"></div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.8.0/dist/leaflet.js"></script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const fileForm = document.getElementById('file-form');
+            const fileInput = document.getElementById('file-input');
+            const previewContainer = document.getElementById('preview-container');
+            const instructionText = document.getElementById('instruction-text');
+            const geocodeButton = document.getElementById('geocode-btn');
+            const progressBar = document.getElementById('progress-bar');
+            const progressBarContainer = document.getElementById('progress-bar-container');
+            const downloadResultButton = document.getElementById('download-result');
+            const mapElement = document.getElementById('map');
+
+            let uploadedFile;
+            let selectedColumnIndex = null;
+            let selectedColumnName = null;
+
+            fileForm.addEventListener('submit', async (event) => {
+                event.preventDefault();
+                if (!fileInput.files[0]) {
+                    alert('Valitse tiedosto.');
+                    return;
+                }
+
+                uploadedFile = fileInput.files[0];
+                const formData = new FormData();
+                formData.append('file', uploadedFile);
+
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                if (result.error) {
+                    alert(result.error);
+                } else {
+                    displayPreviewTable(result.preview);
+                    instructionText.style.display = 'block';
+                    geocodeButton.style.display = 'block';
+                }
+            });
+
+            function displayPreviewTable(data) {
+                const table = document.createElement('table');
+                table.classList.add('table', 'table-striped', 'table-sm');
+
+                const thead = document.createElement('thead');
+                const headerRow = document.createElement('tr');
+                data.columns.forEach((col, colIndex) => {
+                    const th = document.createElement('th');
+                    th.innerText = col;
+                    th.addEventListener('click', () => selectColumn(colIndex));
+                    headerRow.appendChild(th);
+                });
+                thead.appendChild(headerRow);
+                table.appendChild(thead);
+
+                const tbody = document.createElement('tbody');
+                data.rows.forEach((row) => {
+                    const tr = document.createElement('tr');
+                    row.forEach((cell) => {
+                        const td = document.createElement('td');
+                        td.innerText = cell;
+                        tr.appendChild(td);
+                    });
+                    tbody.appendChild(tr);
+                });
+                table.appendChild(tbody);
+
+                previewContainer.innerHTML = '';
+                previewContainer.appendChild(table);
+            }
+
+            function selectColumn(index) {
+                const table = previewContainer.querySelector('table');
+                const thElements = table.querySelectorAll('th');
+                const trElements = table.querySelectorAll('tr');
+
+                thElements.forEach(th => th.classList.remove('selected-column'));
+                trElements.forEach(tr => {
+                    tr.querySelectorAll('td').forEach((td, tdIndex) => {
+                        td.classList.toggle('selected-column', tdIndex === index);
+                    });
+                });
+
+                thElements[index].classList.add('selected-column');
+                selectedColumnIndex = index;
+                selectedColumnName = thElements[index].innerText;
+            }
+
+            geocodeButton.addEventListener('click', async () => {
+                if (selectedColumnIndex === null || selectedColumnName === null) {
+                    alert('Please select a column.');
+                    return;
+                }
+
+                const totalAddressesResponse = await fetch('/get_address_count', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        address_column: selectedColumnName,
+                        file_name: uploadedFile.name
+                    })
+                });
+
+                const totalAddresses = await totalAddressesResponse.json();
+
+                progressBarContainer.style.display = 'block';
+                progressBar.style.width = `0%`;
+                progressBar.innerText = `0% (0 / ${totalAddresses}, 0 errors)`;
+
+                const geocodeData = [];
+
+                for (let i = 0; i < totalAddresses; i++) {
+                    const formData = new FormData();
+                    formData.append('file_name', uploadedFile.name);
+                    formData.append('address_column', selectedColumnName);
+                    formData.append('index', i.toString());
+
+                    try {
+                        const response = await fetch('/geocode_chunk', {
+                            method: 'POST',
+                            body: formData
+                        });
+
+                        const result = await response.json();
+                        if (!result.error) {
+                            geocodeData.push(result);
+                        }
+
+                        const percentComplete = Math.round(((i + 1) / totalAddresses) * 100);
+                        progressBar.style.width = `${percentComplete}%`;
+                        progressBar.innerText = `${percentComplete}% (${i + 1} / ${totalAddresses}, ${geocodeData.length} geocoded)`;
+
+                    } catch (error) {
+                        console.error('Geocoding chunk error:', error);
+                    }
+                }
+
+                progressBar.style.width = `100%`;
+                progressBar.innerText = `100% (${totalAddresses} / ${totalAddresses}, ${geocodeData.length} muunnettu)`;
+
+                map = L.map(mapElement).setView([64.0, 26.0], 5);
+
+                L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png', {
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+                    maxZoom: 19
+                }).addTo(map);
+
+                geocodeData.forEach(data => {
+                    if (data.latitude && data.longitude) {
+                        L.marker([data.latitude, data.longitude]).addTo(map);
+                    }
+                });
+
+                downloadResultButton.style.display = 'block';
+            });
+
+            downloadResultButton.addEventListener('click', async () => {
+                const response = await fetch('/download_result', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ file_name: uploadedFile.name })
+                });
+
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'geocoded_result.xlsx';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+            });
+        });
+    </script>
+</body>
+</html>
