@@ -2,15 +2,24 @@ from flask import Flask, request, jsonify, render_template, send_file
 import pandas as pd
 import requests
 from io import BytesIO
+from poi_frame_analysis import poi_analysis  # Import the Blueprint
 
 app = Flask(__name__)
+app.register_blueprint(poi_analysis, url_prefix='/poi-analysis')  # Register the Blueprint
 
-# Dictionary to hold uploaded DataFrames
 uploads = {}
 
 @app.route('/')
 def index():
     return render_template('index.html')
+
+# This route should be defined to serve the analyze.html page
+@app.route('/analyze')
+def analysis_index():
+    return render_template('analyze.html')
+
+if __name__ == "__main__":
+    app.run(debug=True)
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -31,35 +40,29 @@ def upload_file():
     preview_rows = df.head(10).values.tolist()
     return jsonify(columns=columns, preview={"columns": columns, "rows": preview_rows})
 
-
 @app.route('/get_address_count', methods=['POST'])
 def get_address_count():
     try:
-        data = request.get_json(force=True)  # Explicitly parse JSON and raise error if not possible
+        data = request.get_json(force=True)
     except Exception as e:
         app.logger.error("Invalid JSON format received")
         return jsonify({"error": "Invalid request format"}), 400
 
-    # Check essential keys
     if 'file_name' not in data or 'address_column' not in data:
         return jsonify({"error": "Request missing 'file_name' or 'address_column'"}), 400
 
     file_name = data['file_name']
     address_column = data['address_column']
 
-    # Confirm file presence
     if file_name not in uploads:
         return jsonify({"error": "File not found"}), 404
 
     df = uploads[file_name]
 
-    # Validate the column exists
     if address_column not in df.columns:
         return jsonify({"error": "Column not found in the file"}), 400
 
     return jsonify(len(df[address_column]))
-
-
 
 @app.route('/geocode_chunk', methods=['POST'])
 def geocode_chunk():
